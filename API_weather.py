@@ -4,6 +4,8 @@
 # 4주차 개인 프로젝트: Open-Meteo API를 활용한 날씨 리포트
 
 from datetime import datetime, timedelta
+import json
+from pathlib import Path
 
 import requests
 
@@ -162,7 +164,8 @@ def print_report(location: dict, forecasts: list[dict]) -> None:
         for sample in day["samples"]:
             hour = datetime.fromisoformat(sample["time"]).hour
             time_label = "오전 06:00" if hour == 6 else "오후 15:00"
-            print(f"  🌅 {time_label}" if hour == 6 else f"  🌇 {time_label}")
+            icon = "🌅" if hour == 6 else "🌇"
+            print(f"  {icon} {time_label}")
             print(f"     날씨: {weather_description(sample['weather_code'])}")
             print(f"     기온: {sample['temperature']} °C")
             print(f"     강수확률: {sample['precipitation_probability']}%")
@@ -178,6 +181,28 @@ def print_report(location: dict, forecasts: list[dict]) -> None:
 
     print()
     print("=" * 58)
+
+
+def save_json(location: dict, forecasts: list[dict]) -> Path:
+    """현재 날씨 리포트를 UTF-8 JSON 파일로 저장합니다."""
+    safe_name = "".join(
+        char if char.isalnum() or char in ("-", "_") else "_"
+        for char in location["name"]
+    )
+    filename = f"weather_{safe_name}_{datetime.now():%Y%m%d_%H%M%S}.json"
+    path = Path(filename)
+
+    payload = {
+        "repository": "https://github.com/pachir1su/CreativeGongHak",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "location": location,
+        "forecasts": forecasts,
+    }
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return path
 
 
 def main():
@@ -198,9 +223,20 @@ def main():
     forecasts = extract_target_forecasts(weather)
     print_report(location, forecasts)
 
+    answer = input("\n날씨 정보를 JSON 파일로 저장하시겠습니까? (y/n): ").strip().lower()
+    if answer in {"y", "yes"}:
+        path = save_json(location, forecasts)
+        print(f"저장 완료: {path.resolve()}")
+
 
 if __name__ == "__main__":
     try:
         main()
-    except (requests.RequestException, ValueError, KeyError, IndexError) as exc:
+    except requests.Timeout:
+        print("오류: API 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.")
+    except requests.RequestException as exc:
+        print(f"오류: 날씨 API 요청에 실패했습니다. ({exc})")
+    except (ValueError, KeyError, IndexError) as exc:
         print(f"오류: {exc}")
+    except KeyboardInterrupt:
+        print("\n프로그램을 종료합니다.")
