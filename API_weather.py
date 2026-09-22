@@ -11,6 +11,37 @@ GEOCODING_API = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_API = "https://api.open-meteo.com/v1/forecast"
 TARGET_HOURS = (6, 15)
 
+WMO_WEATHER = {
+    0: "맑음",
+    1: "대체로 맑음",
+    2: "부분적으로 흐림",
+    3: "흐림",
+    45: "안개",
+    48: "서리 안개",
+    51: "약한 이슬비",
+    53: "이슬비",
+    55: "강한 이슬비",
+    56: "약한 어는 이슬비",
+    57: "강한 어는 이슬비",
+    61: "약한 비",
+    63: "비",
+    65: "강한 비",
+    66: "약한 어는 비",
+    67: "강한 어는 비",
+    71: "약한 눈",
+    73: "눈",
+    75: "강한 눈",
+    77: "싸락눈",
+    80: "약한 소나기",
+    81: "소나기",
+    82: "강한 소나기",
+    85: "약한 눈 소나기",
+    86: "강한 눈 소나기",
+    95: "천둥번개",
+    96: "우박 동반 천둥번개",
+    99: "강한 우박 동반 천둥번개",
+}
+
 
 def geocode_city(city: str) -> dict:
     """도시 이름을 위도/경도로 변환합니다."""
@@ -59,9 +90,15 @@ def fetch_weather(latitude: float, longitude: float) -> dict:
 def extract_target_forecasts(weather: dict) -> list[dict]:
     """오늘부터 3일간 오전 6시와 오후 3시 데이터만 추출합니다."""
     hourly = weather["hourly"]
-    by_time = {
+    daily = weather["daily"]
+
+    hourly_index = {
         timestamp: index
         for index, timestamp in enumerate(hourly["time"])
+    }
+    daily_index = {
+        date_text: index
+        for index, date_text in enumerate(daily["time"])
     }
 
     start_date = datetime.fromisoformat(hourly["time"][0]).date()
@@ -69,11 +106,12 @@ def extract_target_forecasts(weather: dict) -> list[dict]:
 
     for offset in range(3):
         current_date = start_date + timedelta(days=offset)
+        date_text = current_date.isoformat()
         samples = []
 
         for hour in TARGET_HOURS:
-            timestamp = f"{current_date.isoformat()}T{hour:02d}:00"
-            index = by_time.get(timestamp)
+            timestamp = f"{date_text}T{hour:02d}:00"
+            index = hourly_index.get(timestamp)
             if index is None:
                 continue
 
@@ -88,9 +126,58 @@ def extract_target_forecasts(weather: dict) -> list[dict]:
                 }
             )
 
-        result.append({"date": current_date.isoformat(), "samples": samples})
+        d_index = daily_index.get(date_text)
+        result.append(
+            {
+                "date": date_text,
+                "samples": samples,
+                "temperature_min": daily["temperature_2m_min"][d_index] if d_index is not None else None,
+                "temperature_max": daily["temperature_2m_max"][d_index] if d_index is not None else None,
+            }
+        )
 
     return result
+
+
+def weather_description(code: int) -> str:
+    return WMO_WEATHER.get(code, f"알 수 없음({code})")
+
+
+def day_label(offset: int) -> str:
+    return ("오늘", "내일", "모레")[offset]
+
+
+def print_report(location: dict, forecasts: list[dict]) -> None:
+    print()
+    print("=" * 58)
+    print(f"☀️ {location['name']} 날씨 예보 (오전 6시 / 오후 3시 기준)")
+    print("=" * 58)
+
+    for offset, day in enumerate(forecasts):
+        date_obj = datetime.fromisoformat(day["date"])
+        print()
+        print(f"📅 {day_label(offset)} ({date_obj:%m.%d.})")
+        print("-" * 50)
+
+        for sample in day["samples"]:
+            hour = datetime.fromisoformat(sample["time"]).hour
+            time_label = "오전 06:00" if hour == 6 else "오후 15:00"
+            print(f"  🌅 {time_label}" if hour == 6 else f"  🌇 {time_label}")
+            print(f"     날씨: {weather_description(sample['weather_code'])}")
+            print(f"     기온: {sample['temperature']} °C")
+            print(f"     강수확률: {sample['precipitation_probability']}%")
+            print(f"     습도: {sample['humidity']}%")
+            print(f"     풍속: {sample['wind_speed']} km/h")
+            print()
+
+        if day["temperature_min"] is not None:
+            print(
+                f"  🌡 일일 기온: 최저 {day['temperature_min']} °C / "
+                f"최고 {day['temperature_max']} °C"
+            )
+
+    print()
+    print("=" * 58)
 
 
 def main():
@@ -109,21 +196,11 @@ def main():
 
     weather = fetch_weather(location["latitude"], location["longitude"])
     forecasts = extract_target_forecasts(weather)
-
-    for day in forecasts:
-        print(f"\n{day['date']}")
-        for sample in day["samples"]:
-            clock = sample["time"].split("T")[1]
-            print(
-                f"  {clock} | {sample['temperature']}°C | "
-                f"습도 {sample['humidity']}% | "
-                f"강수확률 {sample['precipitation_probability']}% | "
-                f"풍속 {sample['wind_speed']} km/h"
-            )
+    print_report(location, forecasts)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (requests.RequestException, ValueError, KeyError) as exc:
+    except (requests.RequestException, ValueError, KeyError, IndexError) as exc:
         print(f"오류: {exc}")
